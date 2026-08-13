@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Viariavel — Type Tester</title>
+<style>
+  @font-face {
+    font-family: 'Viariavel';
+    src: url('assets/fonts/viariavel.ttf') format('truetype');
+    font-display: block;
+  }
+
+  *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    background: #ffffff;
+  }
+
+  /* Custom pencil/edit cursor using Material Symbols SVG */
+  body {
+    cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34a.9959.9959 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z'/%3E%3C/svg%3E") 0 24, auto;
+  }
+
+  /* ── Hidden textarea that captures all keyboard input ───────────────── */
+  #capture {
+    position: fixed;
+    opacity: 0;
+    pointer-events: none;
+    width: 1px;
+    height: 1px;
+    top: 0;
+    left: 0;
+    border: none;
+    outline: none;
+    resize: none;
+  }
+
+  /* ── Canvas behind everything ───────────────────────────────────────── */
+  #canvas {
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+  }
+
+  /* ── Text layer ─────────────────────────────────────────────────────── */
+  #text-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    padding: 52px 52px 100px;
+    pointer-events: none;
+    overflow: hidden;
+  }
+
+  #type-area {
+    font-family: 'Viariavel', Georgia, 'Times New Roman', serif;
+    font-size: 96px;
+    line-height: 1.06;
+    letter-spacing: -0.01em;
+    color: #111111;
+    background: transparent;
+    text-align: left;
+    display: block;
+    word-break: break-word;
+    white-space: pre-wrap;
+    -webkit-font-smoothing: antialiased;
+    height: calc(100vh - 160px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    user-select: none;
+    pointer-events: auto;
+    /* blinking caret rendered via pseudo-element */
+    position: relative;
+    /* hide scrollbar visually but keep scrollable */
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+
+  #type-area::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Placeholder */
+  #type-area:empty::before {
+    content: 'TYPE HERE.';
+    color: #d8d8d8;
+  }
+
+  /* Blinking caret — Viariavel I glyph */
+  #caret {
+    display: inline;
+    font-family: 'Viariavel', serif;
+    color: #111111;
+    animation: blink 1s step-start infinite;
+    /* inherits font-size and variation settings from #type-area */
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0; }
+  }
+
+  /* ── Bottom bar ─────────────────────────────────────────────────────── */
+  #bottom-bar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 56px;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 52px;
+    pointer-events: none;
+  }
+
+  /* Size control — left */
+  .size-group {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    pointer-events: auto;
+  }
+
+  .ui-label {
+    font-family: 'Viariavel', serif;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #111111;
+    user-select: none;
+  }
+
+  .btn {
+    all: unset;
+    font-family: 'Viariavel', serif;
+    font-size: 13px;
+    color: #111111;
+    border-bottom: 1px solid #111111;
+    cursor: pointer;
+    padding-bottom: 1px;
+    line-height: 1;
+    user-select: none;
+    transition: opacity 0.1s;
+  }
+  .btn:hover { opacity: 0.25; }
+
+  .size-value {
+    font-family: 'Viariavel', serif;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    color: #111111;
+    min-width: 38px;
+    text-align: center;
+    user-select: none;
+  }
+
+  /* Caption — center */
+  #caption {
+    font-family: 'Viariavel', serif;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: #111111;
+    text-align: center;
+    line-height: 1.7;
+    user-select: none;
+    pointer-events: none;
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+  }
+
+  /* Font name — right */
+  #watermark {
+    font-family: 'Viariavel', serif;
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: #111111;
+    user-select: none;
+    pointer-events: none;
+  }
+
+  /* ── Axes panel — centered ──────────────────────────────────────────── */
+  #axes-panel {
+    position: fixed;
+    bottom: 64px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: 32px;
+    pointer-events: auto;
+  }
+
+  .axis-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .axis-label {
+    font-family: 'Viariavel', serif;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #111111;
+    user-select: none;
+    white-space: nowrap;
+  }
+
+  .axis-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 80px;
+    height: 1px;
+    background: #111111;
+    outline: none;
+    cursor: pointer;
+  }
+  .axis-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #111111;
+    cursor: pointer;
+  }
+  .axis-slider::-moz-range-thumb {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #111111;
+    border: none;
+    cursor: pointer;
+  }
+
+  .axis-val {
+    font-family: 'Viariavel', serif;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    color: #111111;
+    min-width: 28px;
+    user-select: none;
+  }
+
+  .btn-animate {
+    all: unset;
+    font-family: 'Viariavel', serif;
+    font-size: 11px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #111111;
+    border-bottom: 1px solid #111111;
+    cursor: pointer;
+    padding-bottom: 1px;
+    line-height: 1;
+    user-select: none;
+    transition: opacity 0.1s;
+    min-width: 52px;
+    text-align: center;
+  }
+  .btn-animate:hover { opacity: 0.25; }
+
+  /* ── Fade hint ──────────────────────────────────────────────────────── */
+  #hint {
+    position: fixed;
+    top: 52px;
+    right: 52px;
+    font-family: 'Viariavel', serif;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #111111;
+    z-index: 30;
+    user-select: none;
+    pointer-events: none;
+    line-height: 1.9;
+    text-align: right;
+    opacity: 1;
+    transition: opacity 1.4s ease;
+  }
+  #hint.gone { opacity: 0; }
+</style>
+</head>
+<body>
+
+<!-- Hidden textarea — always focused, catches all keypresses -->
+<textarea id="capture" tabindex="0" autocomplete="off" autocorrect="off"
+  autocapitalize="characters" spellcheck="false" aria-hidden="true"></textarea>
+
+<canvas id="canvas"></canvas>
+
+<div id="text-layer">
+  <div id="type-area"><span id="text-content"></span><span id="caret">I</span></div>
+</div>
+
+<div id="axes-panel">
+  <div class="axis-group">
+    <span class="axis-label">Serif</span>
+    <input class="axis-slider" id="sl-serf" type="range" min="0" max="1" step="0.01" value="0">
+    <span class="axis-val" id="val-serf">0</span>
+  </div>
+  <div class="axis-group">
+    <span class="axis-label">Roundness</span>
+    <input class="axis-slider" id="sl-rndn" type="range" min="400" max="1000" step="1" value="400">
+    <span class="axis-val" id="val-rndn">400</span>
+  </div>
+  <div class="axis-group">
+    <span class="axis-label">Width</span>
+    <input class="axis-slider" id="sl-wdth" type="range" min="100" max="200" step="1" value="100">
+    <span class="axis-val" id="val-wdth">100</span>
+  </div>
+  <button class="btn-animate" id="btn-animate">Animate</button>
+</div>
+
+<div id="bottom-bar">
+  <div class="size-group">
+    <span class="ui-label">Size</span>
+    <button class="btn" id="btn-down">−</button>
+    <span class="size-value" id="size-val">96px</span>
+    <button class="btn" id="btn-up">+</button>
+  </div>
+
+  <div id="caption">
+    Uppercase A–Z · 0–9 · minimal punctuation only<br>
+    No accents · refresh to clear
+  </div>
+
+  <div id="watermark">Viariavel</div>
+</div>
+
+<div id="hint">
+  Just start typing<br>
+  Click to scribble<br>
+  Drag to draw<br>
+  Scroll to navigate
+</div>
+
+<script>
+// ── Canvas ────────────────────────────────────────────────────────────────
+const canvas = document.getElementById('canvas');
+const ctx    = canvas.getContext('2d');
+const DPR    = window.devicePixelRatio || 1;
+let snapshot = null;
+
+function fitCanvas() {
+  const W = window.innerWidth, H = window.innerHeight;
+  if (canvas.width > 0) snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  canvas.width  = W * DPR;
+  canvas.height = H * DPR;
+  canvas.style.width  = W + 'px';
+  canvas.style.height = H + 'px';
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  if (snapshot) ctx.putImageData(snapshot, 0, 0);
+}
+fitCanvas();
+window.addEventListener('resize', fitCanvas);
+
+// ── Text state ────────────────────────────────────────────────────────────
+// Allowed: A-Z, 0-9, space, and a small set of punctuation
+const ALLOWED = /^[A-Z0-9 .,!?:;'"()\-]$/;
+let text = '';
+const textContent = document.getElementById('text-content');
+const typeArea = document.getElementById('type-area');
+
+function renderText() {
+  // Use \n as line breaks, render as <br> nodes
+  const lines = text.split('\n');
+  textContent.innerHTML = '';
+  lines.forEach((line, i) => {
+    textContent.appendChild(document.createTextNode(line));
+    if (i < lines.length - 1) {
+      textContent.appendChild(document.createElement('br'));
+    }
+  });
+  // Auto-scroll to bottom so the caret stays visible
+  typeArea.scrollTop = typeArea.scrollHeight;
+}
+
+// ── Capture textarea — always focused ────────────────────────────────────
+const capture = document.getElementById('capture');
+
+// Re-focus capture whenever focus drifts, unless a button is active
+document.addEventListener('click', e => {
+  if (!e.target.closest('#bottom-bar') && !e.target.closest('#axes-panel')) capture.focus();
+}, true);
+
+// Keep capture focused on page load
+window.addEventListener('load', () => capture.focus());
+capture.focus();
+
+// Intercept keydown for backspace + special keys before input fires
+capture.addEventListener('keydown', e => {
+  // Enter — insert a line break
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    text += '\n';
+    renderText();
+    return;
+  }
+
+  // Backspace
+  if (e.key === 'Backspace') {
+    e.preventDefault();
+    // Remove last character (or \n)
+    text = text.slice(0, -1);
+    renderText();
+    return;
+  }
+
+  // Block everything except printable single chars
+  if (e.key.length !== 1) { e.preventDefault(); return; }
+
+  // Convert to uppercase, strip accents via NFD normalization
+  const upper = e.key.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+  if (!ALLOWED.test(upper)) { e.preventDefault(); return; }
+
+  e.preventDefault();
+  text += upper;
+  renderText();
+});
+
+// Swallow all paste, composition, and input events on capture
+capture.addEventListener('paste', e => e.preventDefault());
+capture.addEventListener('compositionstart', e => e.preventDefault());
+
+// Refocus capture after button clicks
+document.getElementById('btn-up').addEventListener('click',   e => { e.stopPropagation(); setSize(si + 1); capture.focus(); });
+document.getElementById('btn-down').addEventListener('click', e => { e.stopPropagation(); setSize(si - 1); capture.focus(); });
+
+// ── Size control ──────────────────────────────────────────────────────────
+const SIZES  = [14, 18, 24, 32, 42, 54, 72, 96, 120, 144, 180, 220, 280];
+let   si     = 7;
+const sizeEl = document.getElementById('size-val');
+
+function setSize(i) {
+  si = Math.max(0, Math.min(SIZES.length - 1, i));
+  typeArea.style.fontSize = SIZES[si] + 'px';
+  sizeEl.textContent      = SIZES[si] + 'px';
+}
+setSize(si);
+
+// ── Scroll scrolls the text area instead of resizing ────────────────────
+document.addEventListener('wheel', e => {
+  if (e.target.closest('#bottom-bar') || e.target.closest('#axes-panel')) return;
+  e.preventDefault();
+  typeArea.scrollTop += e.deltaY;
+}, { passive: false });
+
+// ── Crayon colour palette ─────────────────────────────────────────────────
+const PALETTE = [
+  [355, 94, 48],
+  [14,  95, 52],
+  [35,  96, 50],
+  [52,  92, 46],
+  [112, 72, 38],
+  [162, 82, 36],
+  [200, 90, 48],
+  [222, 86, 56],
+  [255, 78, 56],
+  [285, 78, 48],
+  [318, 88, 50],
+  [12,  65, 34],
+];
+
+function rndColor() {
+  const [h, s, l] = PALETTE[Math.floor(Math.random() * PALETTE.length)];
+  return `hsl(${h + (Math.random()-0.5)*14},${s + (Math.random()-0.5)*6}%,${l + (Math.random()-0.5)*5}%)`;
+}
+
+// ── Crayon stroke engine ──────────────────────────────────────────────────
+function crayonize(path, col, baseWidth) {
+  const PASSES = 7;
+  for (let p = 0; p < PASSES; p++) {
+    const wScale = 0.35 + Math.random() * 0.9;
+    const alpha  = 0.18 + Math.random() * 0.42;
+    const jx     = (Math.random() - 0.5) * 2.8;
+    const jy     = (Math.random() - 0.5) * 2.8;
+    ctx.save();
+    ctx.strokeStyle = col;
+    ctx.lineWidth   = baseWidth * wScale;
+    ctx.lineCap     = 'round';
+    ctx.lineJoin    = 'round';
+    ctx.globalAlpha = alpha;
+    ctx.translate(jx, jy);
+    ctx.stroke(path);
+    ctx.restore();
+  }
+  ctx.save();
+  ctx.strokeStyle = col;
+  ctx.lineWidth   = baseWidth * 0.25;
+  ctx.lineCap     = 'round';
+  ctx.lineJoin    = 'round';
+  ctx.globalAlpha = 0.55;
+  ctx.stroke(path);
+  ctx.restore();
+}
+
+// ── Scribble shapes ───────────────────────────────────────────────────────
+function drawScribble(ox, oy, col) {
+  const R = Math.random();
+  const baseW = 5 + Math.random() * 6;
+
+  if (R < 0.33) {
+    const path = new Path2D();
+    let a = Math.random() * Math.PI * 2, r = 3;
+    let px = ox, py = oy;
+    path.moveTo(px, py);
+    const N = 24 + ~~(Math.random() * 26);
+    for (let i = 0; i < N; i++) {
+      a += 0.18 + Math.random() * 0.34;
+      r += 2.5 + Math.random() * 3.2;
+      const nx = ox + Math.cos(a) * r;
+      const ny = oy + Math.sin(a) * r;
+      path.quadraticCurveTo(
+        (px + nx) / 2 + (Math.random() - 0.5) * 16,
+        (py + ny) / 2 + (Math.random() - 0.5) * 16,
+        nx, ny
+      );
+      px = nx; py = ny;
+    }
+    crayonize(path, col, baseW);
+
+  } else if (R < 0.66) {
+    const spread = 50 + Math.random() * 80;
+    const path   = new Path2D();
+    let px = ox + (Math.random() - 0.5) * 28;
+    let py = oy + (Math.random() - 0.5) * 28;
+    path.moveTo(px, py);
+    const N = 10 + ~~(Math.random() * 12);
+    for (let i = 0; i < N; i++) {
+      const nx = ox + (Math.random() - 0.5) * spread * 2;
+      const ny = oy + (Math.random() - 0.5) * spread * 2;
+      path.quadraticCurveTo(
+        (px + nx) / 2 + (Math.random() - 0.5) * spread * 0.9,
+        (py + ny) / 2 + (Math.random() - 0.5) * spread * 0.9,
+        nx, ny
+      );
+      px = nx; py = ny;
+    }
+    crayonize(path, col, baseW);
+
+  } else {
+    const N = 2 + ~~(Math.random() * 4);
+    for (let i = 0; i < N; i++) {
+      const lpath = new Path2D();
+      lpath.ellipse(
+        ox + (Math.random() - 0.5) * 65,
+        oy + (Math.random() - 0.5) * 65,
+        12 + Math.random() * 38,
+        9  + Math.random() * 26,
+        Math.random() * Math.PI, 0,
+        Math.PI * (1.6 + Math.random() * 0.65)
+      );
+      crayonize(lpath, col, baseW * (0.7 + Math.random() * 0.5));
+    }
+    const cpath = new Path2D();
+    let px = ox + (Math.random() - 0.5) * 50;
+    let py = oy + (Math.random() - 0.5) * 50;
+    cpath.moveTo(px, py);
+    for (let i = 0; i < 5; i++) {
+      const nx = ox + (Math.random() - 0.5) * 85;
+      const ny = oy + (Math.random() - 0.5) * 85;
+      cpath.quadraticCurveTo(
+        (px+nx)/2 + (Math.random()-0.5)*32,
+        (py+ny)/2 + (Math.random()-0.5)*32,
+        nx, ny
+      );
+      px = nx; py = ny;
+    }
+    crayonize(cpath, col, baseW * 0.7);
+  }
+}
+
+// ── Freehand crayon stroke ────────────────────────────────────────────────
+function crayonSegment(x1, y1, x2, y2, col, baseW) {
+  const PASSES = 5;
+  for (let p = 0; p < PASSES; p++) {
+    const w  = baseW * (0.3 + Math.random() * 0.9);
+    const a  = 0.15 + Math.random() * 0.45;
+    const jx = (Math.random() - 0.5) * 3;
+    const jy = (Math.random() - 0.5) * 3;
+    ctx.save();
+    ctx.strokeStyle = col;
+    ctx.lineWidth   = w;
+    ctx.lineCap     = 'round';
+    ctx.globalAlpha = a;
+    ctx.beginPath();
+    ctx.moveTo(x1 + jx, y1 + jy);
+    ctx.quadraticCurveTo(
+      (x1 + x2) / 2 + (Math.random() - 0.5) * 8 + jx,
+      (y1 + y2) / 2 + (Math.random() - 0.5) * 8 + jy,
+      x2 + (Math.random() - 0.5) * 3,
+      y2 + (Math.random() - 0.5) * 3
+    );
+    ctx.stroke();
+    ctx.restore();
+  }
+  ctx.save();
+  ctx.strokeStyle = col;
+  ctx.lineWidth   = baseW * 0.2;
+  ctx.lineCap     = 'round';
+  ctx.globalAlpha = 0.6;
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+  ctx.restore();
+}
+
+// ── Interaction ───────────────────────────────────────────────────────────
+let painting = false;
+let color    = rndColor();
+let lx = 0, ly = 0;
+let hasMoved = false;
+
+function isUI(target) {
+  return target.closest('#bottom-bar') || target.closest('#hint') || target.closest('#axes-panel');
+}
+
+// Mouse
+document.addEventListener('mousedown', e => {
+  if (isUI(e.target)) return;
+  painting = true;
+  color    = rndColor();
+  lx       = e.clientX;
+  ly       = e.clientY;
+  hasMoved = false;
+});
+
+document.addEventListener('mousemove', e => {
+  if (!painting) return;
+  const dx = e.clientX - lx, dy = e.clientY - ly;
+  if (dx*dx + dy*dy < 4) return;
+  hasMoved = true;
+  crayonSegment(lx, ly, e.clientX, e.clientY, color, 6 + Math.random() * 5);
+  lx = e.clientX; ly = e.clientY;
+});
+
+document.addEventListener('mouseup', e => {
+  if (!painting) return;
+  painting = false;
+  if (!hasMoved) drawScribble(e.clientX, e.clientY, color);
+});
+
+document.addEventListener('mouseleave', () => { painting = false; });
+
+// Touch
+document.addEventListener('touchstart', e => {
+  const t = e.touches[0];
+  if (isUI(document.elementFromPoint(t.clientX, t.clientY))) return;
+  e.preventDefault();
+  painting = true;
+  color    = rndColor();
+  lx       = t.clientX;
+  ly       = t.clientY;
+  hasMoved = false;
+}, { passive: false });
+
+document.addEventListener('touchmove', e => {
+  if (!painting) return;
+  e.preventDefault();
+  const t = e.touches[0];
+  hasMoved = true;
+  crayonSegment(lx, ly, t.clientX, t.clientY, color, 7 + Math.random() * 5);
+  lx = t.clientX; ly = t.clientY;
+}, { passive: false });
+
+document.addEventListener('touchend', e => {
+  if (!painting) return;
+  painting = false;
+  if (!hasMoved) {
+    const t = e.changedTouches[0];
+    drawScribble(t.clientX, t.clientY, color);
+  }
+});
+
+// ── Variable font axes ────────────────────────────────────────────────────
+// SERF 0–1 · RNDN 400–1000 · wdth 100–200
+const axes = {
+  SERF: { el: document.getElementById('sl-serf'), val: document.getElementById('val-serf'), cur: 0 },
+  RNDN: { el: document.getElementById('sl-rndn'), val: document.getElementById('val-rndn'), cur: 400 },
+  wdth: { el: document.getElementById('sl-wdth'), val: document.getElementById('val-wdth'), cur: 100 },
+};
+
+function applyAxes() {
+  typeArea.style.fontVariationSettings =
+    `"SERF" ${axes.SERF.cur}, "RNDN" ${axes.RNDN.cur}, "wdth" ${axes.wdth.cur}`;
+}
+
+Object.entries(axes).forEach(([tag, ax]) => {
+  ax.el.addEventListener('input', () => {
+    ax.cur = parseFloat(ax.el.value);
+    ax.val.textContent = tag === 'SERF' ? ax.cur.toFixed(2) : Math.round(ax.cur);
+    applyAxes();
+    capture.focus();
+  });
+  ax.el.addEventListener('mousedown', e => e.stopPropagation());
+});
+applyAxes();
+
+// ── Animate ───────────────────────────────────────────────────────────────
+let animRaf     = null;
+let animOffset  = 0;   // accumulated elapsed time (ms) — persists across pauses
+let animLastTs  = null;
+const ANIM_DUR  = 3000; // ms for one half-cycle (min→max)
+
+const btnAnimate = document.getElementById('btn-animate');
+
+const animDefs = [
+  ['SERF', 0,   1],
+  ['RNDN', 400, 1000],
+  ['wdth', 100, 200],
+];
+
+function easeInOut(t) {
+  return t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+}
+
+function animStep(ts) {
+  if (animLastTs !== null) animOffset += ts - animLastTs;
+  animLastTs = ts;
+
+  // ping-pong using accumulated offset
+  const cycle = (animOffset % (ANIM_DUR * 2)) / ANIM_DUR;
+  const t = cycle <= 1 ? cycle : 2 - cycle;
+  const e = easeInOut(t);
+
+  animDefs.forEach(([tag, from, to]) => {
+    const v = from + (to - from) * e;
+    axes[tag].cur = v;
+    axes[tag].el.value = v;
+    axes[tag].val.textContent = tag === 'SERF' ? v.toFixed(2) : Math.round(v);
+  });
+  applyAxes();
+  animRaf = requestAnimationFrame(animStep);
+}
+
+function animPlay() {
+  animLastTs = null; // will be set on first frame
+  btnAnimate.textContent = 'Pause';
+  animRaf = requestAnimationFrame(animStep);
+}
+
+function animPause() {
+  cancelAnimationFrame(animRaf);
+  animRaf    = null;
+  animLastTs = null;
+  btnAnimate.textContent = 'Play';
+}
+
+btnAnimate.addEventListener('click', e => {
+  e.stopPropagation();
+  if (animRaf) { animPause(); } else { animPlay(); }
+  capture.focus();
+});
+
+// ── Fade hint ─────────────────────────────────────────────────────────────
+setTimeout(() => document.getElementById('hint').classList.add('gone'), 4000);
+</script>
+</body>
+</html>
