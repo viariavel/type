@@ -340,8 +340,8 @@
 
 <div id="hint">
   Just start typing<br>
-  Click to scribble<br>
-  Drag to draw<br>
+  Click to scribble · drag to draw<br>
+  Draw O · Q · L · A · V to spell them<br>
   Scroll to navigate
 </div>
 
@@ -386,6 +386,12 @@ function renderText() {
   typeArea.scrollTop = typeArea.scrollHeight;
 }
 
+// Append a character exactly as if it had been typed (used by shape recognition)
+function insertRecognizedChar(ch) {
+  text += ch;
+  renderText();
+}
+
 // ── Capture textarea — always focused ────────────────────────────────────
 const capture = document.getElementById('capture');
 
@@ -428,6 +434,7 @@ capture.addEventListener('keydown', e => {
   e.preventDefault();
   text += upper;
   renderText();
+  animateTypedSquiggle();
 });
 
 // Swallow all paste, composition, and input events on capture
@@ -618,11 +625,203 @@ function crayonSegment(x1, y1, x2, y2, col, baseW) {
   ctx.restore();
 }
 
+// ── Animated squiggle (triggered by typing) ───────────────────────────────
+// Builds a random organic path, sampled into discrete points, then reveals
+// it segment-by-segment over time so it looks hand-drawn as it appears.
+function sampleQuad(p0, c, p1, steps) {
+  const pts = [];
+  for (let i = 1; i <= steps; i++) {
+    const t  = i / steps, mt = 1 - t;
+    pts.push({
+      x: mt*mt*p0.x + 2*mt*t*c.x + t*t*p1.x,
+      y: mt*mt*p0.y + 2*mt*t*c.y + t*t*p1.y
+    });
+  }
+  return pts;
+}
+
+function buildAnimatedPath(ox, oy) {
+  const points = [{ x: ox, y: oy }];
+  const baseW  = 4.5 + Math.random() * 5;
+
+  if (Math.random() < 0.5) {
+    // loose spiral
+    let a = Math.random() * Math.PI * 2, r = 3;
+    let px = ox, py = oy;
+    const N = 14 + ~~(Math.random() * 18);
+    for (let i = 0; i < N; i++) {
+      a += 0.2 + Math.random() * 0.36;
+      r += 2.6 + Math.random() * 3.4;
+      const nx = ox + Math.cos(a) * r;
+      const ny = oy + Math.sin(a) * r;
+      const cx = (px + nx) / 2 + (Math.random() - 0.5) * 16;
+      const cy = (py + ny) / 2 + (Math.random() - 0.5) * 16;
+      points.push(...sampleQuad({ x: px, y: py }, { x: cx, y: cy }, { x: nx, y: ny }, 5));
+      px = nx; py = ny;
+    }
+  } else {
+    // scatter cluster
+    const spread = 34 + Math.random() * 46;
+    let px = ox + (Math.random() - 0.5) * 20;
+    let py = oy + (Math.random() - 0.5) * 20;
+    points[0] = { x: px, y: py };
+    const N = 6 + ~~(Math.random() * 8);
+    for (let i = 0; i < N; i++) {
+      const nx = ox + (Math.random() - 0.5) * spread * 2;
+      const ny = oy + (Math.random() - 0.5) * spread * 2;
+      const cx = (px + nx) / 2 + (Math.random() - 0.5) * spread * 0.9;
+      const cy = (py + ny) / 2 + (Math.random() - 0.5) * spread * 0.9;
+      points.push(...sampleQuad({ x: px, y: py }, { x: cx, y: cy }, { x: nx, y: ny }, 5));
+      px = nx; py = ny;
+    }
+  }
+  return { points, baseW };
+}
+
+function randCanvasPos() {
+  const marginX = 80, topMargin = 80, bottomMargin = 180;
+  const x = marginX + Math.random() * (window.innerWidth - marginX * 2);
+  const y = topMargin + Math.random() * (window.innerHeight - topMargin - bottomMargin);
+  return { x, y };
+}
+
+function animateTypedSquiggle() {
+  const { x, y } = randCanvasPos();
+  const col = rndColor();
+  const { points, baseW } = buildAnimatedPath(x, y);
+  const total = points.length;
+  if (total < 2) return;
+
+  const DURATION = 360 + Math.random() * 260; // ms, start-to-finish
+  const perStep = DURATION / total;
+  let idx = 1, acc = 0, lastTs = null;
+
+  function step(ts) {
+    if (lastTs === null) lastTs = ts;
+    acc += ts - lastTs;
+    lastTs = ts;
+    while (acc >= perStep && idx < total) {
+      crayonSegment(points[idx-1].x, points[idx-1].y, points[idx].x, points[idx].y, col, baseW);
+      idx++;
+      acc -= perStep;
+    }
+    if (idx < total) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+// ── Shape → glyph recognition ──────────────────────────────────────────────
+function ptDist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+
+// Douglas-Peucker simplification: collapses a noisy freehand stroke down to
+// its structural corners so we can reason about "how many bends" it has.
+function simplifyPath(points, epsilon) {
+  if (points.length < 3) return points.slice();
+  function perpDist(p, a, b) {
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (len === 0) return ptDist(p, a);
+    const t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / (len * len);
+    const projx = a.x + t * dx, projy = a.y + t * dy;
+    return Math.hypot(p.x - projx, p.y - projy);
+  }
+  function dp(pts, eps) {
+    if (pts.length < 3) return pts;
+    let maxD = 0, idx = 0;
+    for (let i = 1; i < pts.length - 1; i++) {
+      const d = perpDist(pts[i], pts[0], pts[pts.length - 1]);
+      if (d > maxD) { maxD = d; idx = i; }
+    }
+    if (maxD > eps) {
+      const left  = dp(pts.slice(0, idx + 1), eps);
+      const right = dp(pts.slice(idx), eps);
+      return left.slice(0, -1).concat(right);
+    }
+    return [pts[0], pts[pts.length - 1]];
+  }
+  return dp(points, epsilon);
+}
+
+// Returns an uppercase letter if the freehand stroke resembles a known
+// glyph shape, otherwise null (left as ordinary doodle).
+function classifyShape(rawPoints) {
+  if (rawPoints.length < 6) return null;
+
+  const xs = rawPoints.map(p => p.x), ys = rawPoints.map(p => p.y);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const width = maxX - minX, height = maxY - minY;
+  const boxDiag = Math.hypot(width, height);
+  if (boxDiag < 45) return null; // too small to be a deliberate shape
+
+  const start = rawPoints[0], end = rawPoints[rawPoints.length - 1];
+  const closeDist = ptDist(start, end);
+  const isClosed = closeDist < boxDiag * 0.32;
+
+  if (isClosed) {
+    const cx = xs.reduce((a, b) => a + b, 0) / xs.length;
+    const cy = ys.reduce((a, b) => a + b, 0) / ys.length;
+    const radii = rawPoints.map(p => Math.hypot(p.x - cx, p.y - cy));
+    const meanR = radii.reduce((a, b) => a + b, 0) / radii.length;
+    if (meanR < 15) return null;
+    const variance = radii.reduce((a, r) => a + (r - meanR) * (r - meanR), 0) / radii.length;
+    const normVar  = variance / (meanR * meanR);
+    const aspect   = width / (height || 1);
+
+    if (normVar < 0.16 && aspect > 0.55 && aspect < 1.8) {
+      const maxR = Math.max(...radii);
+      return (maxR / meanR > 1.55) ? 'Q' : 'O';
+    }
+    return null;
+  }
+
+  // Open path — simplify to find its structural corners
+  const eps = Math.max(8, boxDiag * 0.06);
+  const simple = simplifyPath(rawPoints, eps);
+  const interiorCorners = simple.length - 2;
+
+  if (interiorCorners === 0) {
+    const dx = end.x - start.x, dy = end.y - start.y;
+    // steep, mostly-vertical stroke heading upward reads as an arrow shaft
+    if (Math.abs(dy) > Math.abs(dx) * 1.4 && dy < -boxDiag * 0.5) return 'A';
+    return null;
+  }
+
+  if (interiorCorners === 1) {
+    const corner = simple[1];
+    const v1 = { x: corner.x - simple[0].x, y: corner.y - simple[0].y };
+    const v2 = { x: simple[2].x - corner.x, y: simple[2].y - corner.y };
+    const len1 = Math.hypot(v1.x, v1.y), len2 = Math.hypot(v2.x, v2.y);
+    if (len1 < 10 || len2 < 10) return null;
+
+    const dot = (v1.x * v2.x + v1.y * v2.y) / (len1 * len2);
+    const angle = Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI;
+    if (angle < 25) return null; // barely a corner, likely just a wobble
+
+    const cornerAtBottom = corner.y > simple[0].y && corner.y > simple[2].y;
+    const cornerAtTop    = corner.y < simple[0].y && corner.y < simple[2].y;
+    const seg1Vertical   = Math.abs(v1.y) > Math.abs(v1.x) * 1.3;
+    const seg1Horizontal = Math.abs(v1.x) > Math.abs(v1.y) * 1.3;
+    const seg2Vertical   = Math.abs(v2.y) > Math.abs(v2.x) * 1.3;
+    const seg2Horizontal = Math.abs(v2.x) > Math.abs(v2.y) * 1.3;
+
+    if (cornerAtBottom && ((seg1Vertical && seg2Horizontal) || (seg1Horizontal && seg2Vertical))) {
+      return 'L';
+    }
+    if (cornerAtTop) return 'A';    // peak / mountain — reads as an apex like A
+    if (cornerAtBottom) return 'V'; // valley
+    return null;
+  }
+
+  return null; // more corners: not mapped, left as a doodle
+}
+
 // ── Interaction ───────────────────────────────────────────────────────────
 let painting = false;
 let color    = rndColor();
 let lx = 0, ly = 0;
 let hasMoved = false;
+let strokePoints = [];
 
 function isUI(target) {
   return target.closest('#bottom-bar') || target.closest('#hint') || target.closest('#axes-panel');
@@ -636,6 +835,7 @@ document.addEventListener('mousedown', e => {
   lx       = e.clientX;
   ly       = e.clientY;
   hasMoved = false;
+  strokePoints = [{ x: e.clientX, y: e.clientY }];
 });
 
 document.addEventListener('mousemove', e => {
@@ -645,12 +845,18 @@ document.addEventListener('mousemove', e => {
   hasMoved = true;
   crayonSegment(lx, ly, e.clientX, e.clientY, color, 6 + Math.random() * 5);
   lx = e.clientX; ly = e.clientY;
+  strokePoints.push({ x: lx, y: ly });
 });
 
 document.addEventListener('mouseup', e => {
   if (!painting) return;
   painting = false;
-  if (!hasMoved) drawScribble(e.clientX, e.clientY, color);
+  if (!hasMoved) {
+    drawScribble(e.clientX, e.clientY, color);
+  } else {
+    const letter = classifyShape(strokePoints);
+    if (letter) insertRecognizedChar(letter);
+  }
 });
 
 document.addEventListener('mouseleave', () => { painting = false; });
@@ -665,6 +871,7 @@ document.addEventListener('touchstart', e => {
   lx       = t.clientX;
   ly       = t.clientY;
   hasMoved = false;
+  strokePoints = [{ x: t.clientX, y: t.clientY }];
 }, { passive: false });
 
 document.addEventListener('touchmove', e => {
@@ -674,6 +881,7 @@ document.addEventListener('touchmove', e => {
   hasMoved = true;
   crayonSegment(lx, ly, t.clientX, t.clientY, color, 7 + Math.random() * 5);
   lx = t.clientX; ly = t.clientY;
+  strokePoints.push({ x: lx, y: ly });
 }, { passive: false });
 
 document.addEventListener('touchend', e => {
@@ -682,6 +890,9 @@ document.addEventListener('touchend', e => {
   if (!hasMoved) {
     const t = e.changedTouches[0];
     drawScribble(t.clientX, t.clientY, color);
+  } else {
+    const letter = classifyShape(strokePoints);
+    if (letter) insertRecognizedChar(letter);
   }
 });
 
