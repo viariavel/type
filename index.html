@@ -340,8 +340,8 @@
 
 <div id="hint">
   Just start typing<br>
-  Click to scribble · drag to draw<br>
-  Draw O · Q · L · A · V to spell them<br>
+  Click to scribble<br>
+  Drag any shape — it becomes a letter<br>
   Scroll to navigate
 </div>
 
@@ -742,8 +742,24 @@ function simplifyPath(points, epsilon) {
   return dp(points, epsilon);
 }
 
-// Returns an uppercase letter if the freehand stroke resembles a known
-// glyph shape, otherwise null (left as ordinary doodle).
+// ── Shape helpers ───────────────────────────────────────────────────────────
+const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+function randomLetter() { return ALPHABET[~~(Math.random() * 26)]; }
+
+function isVertical(v)   { return Math.abs(v.y) > Math.abs(v.x) * 1.3; }
+function isHorizontal(v) { return Math.abs(v.x) > Math.abs(v.y) * 1.3; }
+function sgn(n) { return n > 0 ? 1 : (n < 0 ? -1 : 0); }
+
+function angleBetween(v1, v2) {
+  const len1 = Math.hypot(v1.x, v1.y), len2 = Math.hypot(v2.x, v2.y);
+  if (len1 < 1e-6 || len2 < 1e-6) return 0;
+  const dot = (v1.x * v2.x + v1.y * v2.y) / (len1 * len2);
+  return Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI;
+}
+
+// Returns an uppercase letter if the freehand stroke resembles one of the
+// mapped glyph shapes below, otherwise null (caller falls back to a random
+// letter — see the rule table in the writeup for what maps to what).
 function classifyShape(rawPoints) {
   if (rawPoints.length < 6) return null;
 
@@ -758,35 +774,70 @@ function classifyShape(rawPoints) {
   const closeDist = ptDist(start, end);
   const isClosed = closeDist < boxDiag * 0.32;
 
-  if (isClosed) {
-    const cx = xs.reduce((a, b) => a + b, 0) / xs.length;
-    const cy = ys.reduce((a, b) => a + b, 0) / ys.length;
-    const radii = rawPoints.map(p => Math.hypot(p.x - cx, p.y - cy));
-    const meanR = radii.reduce((a, b) => a + b, 0) / radii.length;
-    if (meanR < 15) return null;
-    const variance = radii.reduce((a, r) => a + (r - meanR) * (r - meanR), 0) / radii.length;
-    const normVar  = variance / (meanR * meanR);
-    const aspect   = width / (height || 1);
+  const cx = xs.reduce((a, b) => a + b, 0) / xs.length;
+  const cy = ys.reduce((a, b) => a + b, 0) / ys.length;
+  const radii = rawPoints.map(p => Math.hypot(p.x - cx, p.y - cy));
+  const meanR = radii.reduce((a, b) => a + b, 0) / radii.length;
+  const normVar = meanR > 0
+    ? radii.reduce((a, r) => a + (r - meanR) * (r - meanR), 0) / radii.length / (meanR * meanR)
+    : 1;
+  const aspect = width / (height || 1);
 
+  // ── Closed loops: O · Q · D ────────────────────────────────────────────
+  if (isClosed) {
+    if (meanR < 15) return null;
     if (normVar < 0.16 && aspect > 0.55 && aspect < 1.8) {
       const maxR = Math.max(...radii);
-      return (maxR / meanR > 1.55) ? 'Q' : 'O';
+      return (maxR / meanR > 1.55) ? 'Q' : 'O';       // circular, tail => Q, else O
+    }
+    if (aspect < 0.75) {                               // tall, non-circular loop
+      const leftBound = minX + width * 0.35;
+      const leftPts = rawPoints.filter(p => p.x <= leftBound);
+      if (leftPts.length >= 4) {
+        const lxs = leftPts.map(p => p.x);
+        const lMean = lxs.reduce((a, b) => a + b, 0) / lxs.length;
+        const lStd = Math.sqrt(lxs.reduce((a, x) => a + (x - lMean) ** 2, 0) / lxs.length);
+        if (lStd < width * 0.12) return 'D';            // flat left edge on a tall loop
+      }
     }
     return null;
   }
 
-  // Open path — simplify to find its structural corners
+  // ── Near-closed circular arc: C ─────────────────────────────────────────
+  if (closeDist >= boxDiag * 0.32 && closeDist <= boxDiag * 0.85 &&
+      meanR >= 15 && normVar < 0.2) {
+    return 'C';
+  }
+
+  // ── Tall stroke that bulges opposite ways top vs bottom: S ─────────────
+  if (height > width * 1.15) {
+    const midY = (minY + maxY) / 2;
+    const upper = rawPoints.filter(p => p.y < midY);
+    const lower = rawPoints.filter(p => p.y >= midY);
+    if (upper.length >= 3 && lower.length >= 3) {
+      const centerX = (minX + maxX) / 2;
+      const upperOff = upper.reduce((a, p) => a + (p.x - centerX), 0) / upper.length;
+      const lowerOff = lower.reduce((a, p) => a + (p.x - centerX), 0) / lower.length;
+      if (sgn(upperOff) !== 0 && sgn(upperOff) !== sgn(lowerOff) &&
+          Math.abs(upperOff) > width * 0.08 && Math.abs(lowerOff) > width * 0.08) {
+        return 'S';
+      }
+    }
+  }
+
+  // ── Open path — simplify to find its structural corners ────────────────
   const eps = Math.max(8, boxDiag * 0.06);
   const simple = simplifyPath(rawPoints, eps);
   const interiorCorners = simple.length - 2;
 
+  // 0 corners: a single straight-ish stroke
   if (interiorCorners === 0) {
     const dx = end.x - start.x, dy = end.y - start.y;
-    // steep, mostly-vertical stroke heading upward reads as an arrow shaft
-    if (Math.abs(dy) > Math.abs(dx) * 1.4 && dy < -boxDiag * 0.5) return 'A';
+    if (isVertical({ x: dx, y: dy })) return 'I';
     return null;
   }
 
+  // 1 corner: A · L · J · V · U · T · Y
   if (interiorCorners === 1) {
     const corner = simple[1];
     const v1 = { x: corner.x - simple[0].x, y: corner.y - simple[0].y };
@@ -794,26 +845,62 @@ function classifyShape(rawPoints) {
     const len1 = Math.hypot(v1.x, v1.y), len2 = Math.hypot(v2.x, v2.y);
     if (len1 < 10 || len2 < 10) return null;
 
-    const dot = (v1.x * v2.x + v1.y * v2.y) / (len1 * len2);
-    const angle = Math.acos(Math.max(-1, Math.min(1, dot))) * 180 / Math.PI;
-    if (angle < 25) return null; // barely a corner, likely just a wobble
+    const angle = angleBetween(v1, v2);
+    if (angle < 25) return null; // barely a bend, likely just a wobble
 
     const cornerAtBottom = corner.y > simple[0].y && corner.y > simple[2].y;
     const cornerAtTop    = corner.y < simple[0].y && corner.y < simple[2].y;
-    const seg1Vertical   = Math.abs(v1.y) > Math.abs(v1.x) * 1.3;
-    const seg1Horizontal = Math.abs(v1.x) > Math.abs(v1.y) * 1.3;
-    const seg2Vertical   = Math.abs(v2.y) > Math.abs(v2.x) * 1.3;
-    const seg2Horizontal = Math.abs(v2.x) > Math.abs(v2.y) * 1.3;
+    const rightAngleish  = angle > 65 && angle < 125;
+    const v1Vert = isVertical(v1), v1Horiz = isHorizontal(v1);
+    const v2Vert = isVertical(v2), v2Horiz = isHorizontal(v2);
 
-    if (cornerAtBottom && ((seg1Vertical && seg2Horizontal) || (seg1Horizontal && seg2Vertical))) {
-      return 'L';
+    if (cornerAtBottom) {
+      if (rightAngleish && ((v1Vert && v2Horiz) || (v1Horiz && v2Vert))) {
+        const hLeg = v1Horiz ? v1 : v2;
+        return hLeg.x > 0 ? 'L' : 'J';                 // foot points right => L, left => J
+      }
+      if (v1Vert && v2Vert) return 'U';                // narrow, near-parallel valley
+      if (angle < 70) return 'V';                       // sharp, wide-angled valley
+      return null;
     }
-    if (cornerAtTop) return 'A';    // peak / mountain — reads as an apex like A
-    if (cornerAtBottom) return 'V'; // valley
+
+    if (cornerAtTop) {
+      if (rightAngleish && ((v1Vert && v2Horiz) || (v1Horiz && v2Vert))) {
+        return 'T';                                     // bar + drop from one end
+      }
+      if (angle > 40) return 'A';                        // apex, legs splay downward
+      return null;
+    }
+
+    // corner roughly mid-height (monotonic path): diagonal-in then drop down
+    if (corner.y < minY + height * 0.55 && v2Vert && v2.y > 0) return 'Y';
     return null;
   }
 
-  return null; // more corners: not mapped, left as a doodle
+  // 2 corners (3 segments): Z · N
+  if (interiorCorners === 2) {
+    const [p0, c1, c2, p3] = simple;
+    const s1 = { x: c1.x - p0.x, y: c1.y - p0.y };
+    const s2 = { x: c2.x - c1.x, y: c2.y - c1.y };
+    const s3 = { x: p3.x - c2.x, y: p3.y - c2.y };
+    if (isHorizontal(s1) && isHorizontal(s3) && !isHorizontal(s2) && width >= height * 0.9) return 'Z';
+    if (isVertical(s1) && isVertical(s3) && !isVertical(s2) && height >= width * 0.9) return 'N';
+    return null;
+  }
+
+  // 3 corners (4 segments): W — an alternating up/down/up/down zigzag
+  if (interiorCorners === 3) {
+    const segs = [];
+    for (let i = 0; i < simple.length - 1; i++) {
+      segs.push({ x: simple[i+1].x - simple[i].x, y: simple[i+1].y - simple[i].y });
+    }
+    const signs = segs.map(s => sgn(s.y));
+    const alternating = signs.every((s, i) => i === 0 || (s !== 0 && signs[i-1] !== 0 && s !== signs[i-1]));
+    if (alternating && width > height * 1.1) return 'W';
+    return null;
+  }
+
+  return null; // more corners / no match: caller assigns a random letter
 }
 
 // ── Interaction ───────────────────────────────────────────────────────────
@@ -854,8 +941,7 @@ document.addEventListener('mouseup', e => {
   if (!hasMoved) {
     drawScribble(e.clientX, e.clientY, color);
   } else {
-    const letter = classifyShape(strokePoints);
-    if (letter) insertRecognizedChar(letter);
+    insertRecognizedChar(classifyShape(strokePoints) || randomLetter());
   }
 });
 
@@ -891,8 +977,7 @@ document.addEventListener('touchend', e => {
     const t = e.changedTouches[0];
     drawScribble(t.clientX, t.clientY, color);
   } else {
-    const letter = classifyShape(strokePoints);
-    if (letter) insertRecognizedChar(letter);
+    insertRecognizedChar(classifyShape(strokePoints) || randomLetter());
   }
 });
 
